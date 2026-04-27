@@ -1,0 +1,135 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<section class="upload-page upload-hero">
+    <div class="upload-shell">
+
+        <div class="upload-intro">
+            <div class="badge">AI Medical Report Assistant</div>
+
+            <h1>Start Your Health Report Chat</h1>
+
+            <p>
+                Choose your preferred language, upload a PDF or image report, and let
+                Health-Doc Virtual Assistant explain it in simple words.
+            </p>
+
+            <div class="upload-benefits">
+                <span>PDF/Image Support</span>
+                <span>Bangla & English</span>
+                <span>RAG-based Chat</span>
+            </div>
+        </div>
+
+        <div class="upload-card premium-upload-card">
+            <form method="POST" enctype="multipart/form-data" id="uploadForm">
+                {% csrf_token %}
+
+                <div class="form-section">
+                    <div class="form-section-head">
+                        <span class="step-number">1</span>
+                        <div>
+                            <h2>Choose Language</h2>
+                            <p>Select the language you want the AI to use.</p>
+                        </div>
+                    </div>
+
+                    <div class="language-grid">
+                        <label class="option-card language-option">
+                            <input type="radio" name="language" value="bn" required>
+                            <span class="option-icon">অ</span>
+                            <span>
+                                <strong>বাংলা</strong>
+                                <small>সহজ বাংলা ব্যাখ্যা</small>
+                            </span>
+                        </label>
+
+                        <label class="option-card language-option">
+                            <input type="radio" name="language" value="en" required>
+                            <span class="option-icon">A</span>
+                            <span>
+                                <strong>English</strong>
+                                <small>Simple English explanation</small>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <div class="form-section-head">
+                        <span class="step-number">2</span>
+                        <div>
+                            <h2>Upload Report</h2>
+                            <p>You can upload one or multiple PDF/image reports.</p>
+                        </div>
+                    </div>
+
+                    <label class="file-drop-zone">
+                        <input type="file" name="files" accept=".pdf,image/*" multiple required>
+                        <span class="file-icon">+</span>
+                        <strong>Choose PDF or Image Report</strong>
+                        <small>Supported: PDF, JPG, PNG, WEBP</small>
+                    </label>
+                </div>
+
+                <div class="form-section">
+                    <div class="form-section-head">
+                        <span class="step-number">3</span>
+                        <div>
+                            <h2>Mobile Camera</h2>
+                            <p>On mobile, you can directly take a photo of your report.</p>
+                        </div>
+                    </div>
+
+                    <label class="file-drop-zone compact">
+                        <input type="file" name="camera_file" accept="image/*" capture="environment">
+                        <span class="file-icon camera">⌁</span>
+                        <strong>Take Photo on Mobile</strong>
+                        <small>Clear photo gives better result</small>
+                    </label>
+                </div>
+
+                <button type="submit" class="primary-btn full-btn analyze-premium-btn" id="analyzeBtn">
+                    Analyze Report
+                </button>
+
+                <div class="upload-disclaimer">
+                    Health-Doc explains reports for educational purposes only. It does not diagnose,
+                    prescribe medicine, or replace a licensed doctor.
+                </div>
+            </form>
+        </div>
+
+    </div>
+</section>
+
+<!-- Loading Overlay -->
+<div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-card premium-loading-card">
+        <div class="medical-loader">
+            <div class="pulse-ring"></div>
+            <div class="pulse-core">+</div>
+        </div>
+
+        <h2 id="loadingTitle">Analyzing your report...</h2>
+        <p id="loadingText">
+            Please wait while Health-Doc Virtual Assistant extracts and understands your report.
+        </p>
+
+        <div class="loading-steps">
+            <div class="step active">
+                <span></span>
+                Uploading file
+            </div>
+            <div class="step active">
+                <span></span>
+                Extracting text
+            </div>
+            <div class="step active">
+                <span></span>
+                Preparing AI summary
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

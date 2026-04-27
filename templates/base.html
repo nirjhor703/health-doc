@@ -1,0 +1,50 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <title>Health-Doc Virtual Assistant</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+</head>
+<body>
+
+    <!-- GLOBAL HEADER -->
+    <header class="site-header">
+        <a href="{% url 'landing' %}" class="brand">
+            <span class="brand-icon">+</span>
+            <span>
+                <strong>Health-Doc</strong>
+                <small>Virtual Assistant</small>
+            </span>
+        </a>
+
+        <nav class="site-nav">
+            <a href="{% url 'landing' %}">Home</a>
+            <a href="{% url 'upload_report' %}">New Report</a>
+
+            <button type="button" class="theme-toggle" id="themeToggle">
+                <span id="themeIcon">🌙</span>
+                <span id="themeText">Dark</span>
+            </button>
+        </nav>
+    </header>
+
+    <!-- PAGE CONTENT -->
+    <main class="page-shell">
+        {% block content %}
+        {% endblock %}
+    </main>
+
+    <!-- GLOBAL FOOTER -->
+    <footer class="site-footer">
+        <p>
+            Health-Doc Virtual Assistant explains uploaded reports for educational purposes only.
+            It does not diagnose disease, prescribe medicine, or replace a licensed doctor.
+        </p>
+    </footer>
+
+    <script src="{% static 'js/upload.js' %}"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<section class="landing-page">
+    <div class="hero-card">
+        <div class="badge">AI Medical Report Assistant</div>
+
+        <h1>Health-Doc Virtual Assistant</h1>
+
+        <p>
+            Upload your medical report as PDF or image and chat with an AI assistant
+            that explains your report in simple Bangla or English.
+        </p>
+
+        <div class="safety-note">
+            This assistant explains reports for educational purposes only.
+            It does not diagnose disease, prescribe medicine, or replace a licensed doctor.
+        </div>
+
+        <a href="{% url 'upload_report' %}" class="primary-btn">
+            Start Report Analysis
+        </a>
+    </div>
+</section>
+{% endblock %}

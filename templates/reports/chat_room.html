@@ -1,0 +1,183 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<section class="chat-page">
+
+    <!-- LEFT CHAT AREA -->
+    <div class="chat-main">
+
+        <header class="chat-header">
+            <div>
+                <div class="badge">Health-Doc Virtual Assistant</div>
+
+                {% if session.language == "bn" %}
+                    <h1>রিপোর্ট চ্যাট</h1>
+                    <p>আপনার uploaded report/document নিয়ে প্রশ্ন করুন।</p>
+                {% else %}
+                    <h1>Report Chat</h1>
+                    <p>Ask questions about your uploaded report/document.</p>
+                {% endif %}
+            </div>
+
+            <a href="{% url 'upload_report' %}" class="small-btn">
+                {% if session.language == "bn" %}
+                    নতুন রিপোর্ট
+                {% else %}
+                    New Report
+                {% endif %}
+            </a>
+        </header>
+
+        <div class="uploaded-files-strip">
+            {% for file in session.files.all %}
+                <span>{{ file.original_name }}</span>
+            {% endfor %}
+        </div>
+
+        <div class="chat-messages" id="chatMessages">
+            {% for message in messages %}
+                <div class="message-row {% if message.role == 'user' %}user-row{% else %}assistant-row{% endif %}">
+                    <div class="message-bubble">
+
+                        <div class="message-role">
+                            {% if message.role == 'user' %}
+                                You
+                            {% else %}
+                                Health-Doc AI
+                            {% endif %}
+                        </div>
+
+                        <div class="message-content">
+                            {{ message.content|linebreaks }}
+                        </div>
+
+                        {% if message.role == "assistant" and message.sources %}
+                            <div class="source-box">
+                                <button type="button" class="source-toggle">
+                                    {% if session.language == "bn" %}
+                                        রিপোর্টের যে অংশ দেখে উত্তর দেওয়া হয়েছে
+                                    {% else %}
+                                        Sources used from your report
+                                    {% endif %}
+                                </button>
+
+                                <div class="source-content">
+                                    {% for source in message.sources %}
+                                        <div class="source-item">
+                                            <strong>{{ source.title }}</strong>
+                                            <p>{{ source.content }}</p>
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% endif %}
+
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+
+        <!-- CHAT INPUT -->
+        <form class="chat-input-area" id="chatForm" method="POST" action="{% url 'chat_room' session.id %}">
+            {% csrf_token %}
+
+            <!-- Messenger-style upload button -->
+            <button type="button" class="chat-attach-btn" id="openAttachFile" title="Attach report">
+                +
+            </button>
+
+            <textarea
+                id="chatInput"
+                name="message"
+                rows="1"
+                placeholder="{% if session.language == 'bn' %}আপনার প্রশ্ন লিখুন...{% else %}Ask anything about this report...{% endif %}"
+            ></textarea>
+
+            <button type="submit" class="chat-send-btn">
+                {% if session.language == "bn" %}
+                    পাঠান
+                {% else %}
+                    Send
+                {% endif %}
+            </button>
+        </form>
+
+        <!-- HIDDEN INLINE ATTACH FORM -->
+        <form
+            method="POST"
+            enctype="multipart/form-data"
+            action="{% url 'attach_report' session.id %}"
+            id="inlineAttachForm"
+            class="hidden-attach-form"
+        >
+            {% csrf_token %}
+            <input type="file" name="files" id="inlineAttachInput" accept=".pdf,image/*" multiple>
+        </form>
+
+        <div class="inline-attach-loading" id="inlineAttachLoading">
+            {% if session.language == "bn" %}
+                নতুন রিপোর্ট upload এবং process হচ্ছে...
+            {% else %}
+                Uploading and processing new report...
+            {% endif %}
+        </div>
+
+        <div class="chat-loading" id="chatLoading">
+            {% if session.language == "bn" %}
+                Health-Doc AI উত্তর প্রস্তুত করছে...
+            {% else %}
+                Health-Doc AI is preparing the answer...
+            {% endif %}
+        </div>
+
+        <div class="chat-safety-note">
+            {% if session.language == "bn" %}
+                Health-Doc AI রোগ নির্ণয়, ওষুধ বা চিকিৎসার সিদ্ধান্ত দেয় না। স্বাস্থ্যগত সিদ্ধান্তের জন্য licensed doctor-এর পরামর্শ নিন।
+            {% else %}
+                Health-Doc AI does not diagnose, prescribe medicine, or replace a licensed doctor.
+            {% endif %}
+        </div>
+
+    </div>
+
+    <!-- RIGHT SUGGESTIONS AREA -->
+    <aside class="suggestion-panel">
+        {% if session.language == "bn" %}
+            <h2>প্রস্তাবিত প্রশ্ন</h2>
+            <p>যেকোনো প্রশ্নে click করলে chat box-এ চলে যাবে।</p>
+        {% else %}
+            <h2>Suggested Questions</h2>
+            <p>Click a question to place it in the chat box.</p>
+        {% endif %}
+
+        <div class="question-list">
+            {% for item in suggested_questions %}
+                <button type="button" class="question-chip" data-question="{{ item.question }}">
+                    {{ item.question }}
+                </button>
+            {% endfor %}
+        </div>
+
+        <div class="side-card">
+            {% if session.language == "bn" %}
+                <h3>কি করতে পারবেন?</h3>
+                <ul>
+                    <li>Report summary নিতে পারবেন</li>
+                    <li>Medical terms বুঝতে পারবেন</li>
+                    <li>Doctor type suggestion পাবেন</li>
+                    <li>General lifestyle education পাবেন</li>
+                </ul>
+            {% else %}
+                <h3>What can you ask?</h3>
+                <ul>
+                    <li>Get a report summary</li>
+                    <li>Understand medical terms</li>
+                    <li>Ask doctor type suggestions</li>
+                    <li>Get general lifestyle education</li>
+                </ul>
+            {% endif %}
+        </div>
+    </aside>
+
+</section>
+{% endblock %}

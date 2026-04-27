@@ -1,0 +1,50 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<section class="upload-page">
+    <div class="upload-card">
+        <div class="badge">Processing Complete</div>
+
+        {% if session.language == "bn" %}
+            <h1>আপনার রিপোর্ট process হয়েছে</h1>
+            <p>
+                Uploaded PDF থেকে text extract করার চেষ্টা করা হয়েছে।
+                নিচে extracted text preview দেখতে পারবেন।
+            </p>
+        {% else %}
+            <h1>Your report has been processed</h1>
+            <p>
+                We tried to extract text from your uploaded PDF.
+                You can see the extracted text preview below.
+            </p>
+        {% endif %}
+
+        <div class="safety-note">
+            Session ID: {{ session.id }} <br>
+            Status: {{ session.status }}
+        </div>
+
+        {% if session.initial_summary %}
+            <div class="summary-box">
+                <h3>AI Summary</h3>
+                <pre>{{ session.initial_summary }}</pre>
+            </div>
+        {% endif %}
+
+        {% for file in session.files.all %}
+            <div class="extracted-box">
+                <h3>{{ file.original_name }}</h3>
+                <p><strong>Type:</strong> {{ file.file_type }}</p>
+                <p><strong>Status:</strong> {{ file.processing_status }}</p>
+
+                <h4>Extracted Text Preview:</h4>
+                <pre>{{ file.extracted_text|truncatechars:2000 }}</pre>
+            </div>
+        {% endfor %}
+
+        <a href="{% url 'upload_report' %}" class="primary-btn">
+            Upload Another Report
+        </a>
+    </div>
+</section>
+{% endblock %}
