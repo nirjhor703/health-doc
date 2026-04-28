@@ -6,11 +6,15 @@ from .extractors import extract_text_from_pdf, clean_extracted_text
 
 from ai_engine.llm import (
     extract_text_from_image_with_gemini,
+    extract_text_from_pdf_with_gemini,
     generate_initial_summary_with_gemini,
 )
 from ai_engine.rag import create_faiss_index_for_session
 
 from chat.models import ChatMessage, SuggestedQuestion
+
+
+MIN_EXTRACTED_TEXT_LENGTH = 20
 
 
 def landing_view(request):
@@ -29,6 +33,35 @@ def get_file_type(uploaded_file):
     return "unknown"
 
 
+def is_valid_extracted_text(text):
+    """
+    Check if extracted text is useful enough.
+    """
+
+    if not text:
+        return False
+
+    text = text.strip()
+
+    if len(text) < MIN_EXTRACTED_TEXT_LENGTH:
+        return False
+
+    error_markers = [
+        "FAILED_AFTER_RETRIES",
+        "TEXT_EXTRACTION_ERROR",
+        "NO_READABLE_TEXT_FOUND",
+        "UNSUPPORTED FILE TYPE",
+    ]
+
+    upper_text = text.upper()
+
+    for marker in error_markers:
+        if marker in upper_text:
+            return False
+
+    return True
+
+
 def process_single_uploaded_file(uploaded_file):
     """
     Extract text from a single UploadedReportFile object.
@@ -40,31 +73,55 @@ def process_single_uploaded_file(uploaded_file):
     uploaded_file.save()
 
     try:
+        cleaned_text = ""
+
         if uploaded_file.file_type == "pdf":
+            # 1. First try normal selectable-text PDF extraction
             raw_text = extract_text_from_pdf(uploaded_file.file.path)
             cleaned_text = clean_extracted_text(raw_text)
 
-            uploaded_file.extracted_text = cleaned_text
-            uploaded_file.processing_status = "completed"
-            uploaded_file.save()
+            print("PDF normal extraction length:", len(cleaned_text or ""))
+
+            # 2. If normal extraction fails/empty, fallback to Gemini PDF OCR
+            if not is_valid_extracted_text(cleaned_text):
+                print("PDF normal extraction failed/empty. Trying Gemini PDF OCR...")
+                raw_text = extract_text_from_pdf_with_gemini(uploaded_file.file.path)
+                cleaned_text = clean_extracted_text(raw_text)
+
+                print("Gemini PDF extraction length:", len(cleaned_text or ""))
+                print("Gemini PDF extraction preview:", (cleaned_text or "")[:300])
 
         elif uploaded_file.file_type == "image":
+            # Image OCR using Gemini Vision
             raw_text = extract_text_from_image_with_gemini(uploaded_file.file.path)
             cleaned_text = clean_extracted_text(raw_text)
 
-            uploaded_file.extracted_text = cleaned_text
-            uploaded_file.processing_status = "completed"
-            uploaded_file.save()
+            print("Gemini image extraction length:", len(cleaned_text or ""))
+            print("Gemini image extraction preview:", (cleaned_text or "")[:300])
 
         else:
             uploaded_file.extracted_text = "Unsupported file type."
             uploaded_file.processing_status = "failed"
             uploaded_file.save()
+            return uploaded_file
+
+        if is_valid_extracted_text(cleaned_text):
+            uploaded_file.extracted_text = cleaned_text
+            uploaded_file.processing_status = "completed"
+        else:
+            uploaded_file.extracted_text = "NO_READABLE_TEXT_FOUND"
+            uploaded_file.processing_status = "failed"
+
+        uploaded_file.save()
+        return uploaded_file
 
     except Exception as e:
+        print("TEXT_EXTRACTION_ERROR:", str(e))
+
         uploaded_file.extracted_text = f"TEXT_EXTRACTION_ERROR: {str(e)}"
         uploaded_file.processing_status = "failed"
         uploaded_file.save()
+        return uploaded_file
 
 
 def get_all_extracted_text_for_session(session):
@@ -75,7 +132,11 @@ def get_all_extracted_text_for_session(session):
     all_extracted_text = ""
 
     for uploaded_file in session.files.all():
-        if uploaded_file.extracted_text and uploaded_file.processing_status == "completed":
+        if (
+            uploaded_file.extracted_text
+            and uploaded_file.processing_status == "completed"
+            and is_valid_extracted_text(uploaded_file.extracted_text)
+        ):
             all_extracted_text += f"\n\nFile: {uploaded_file.original_name}\n"
             all_extracted_text += uploaded_file.extracted_text
 
@@ -182,6 +243,9 @@ def processing_report_view(request, session_id):
     # 2. Combine all extracted text
     all_extracted_text = get_all_extracted_text_for_session(session)
 
+    print("ALL EXTRACTED TEXT LENGTH:", len(all_extracted_text or ""))
+    print("ALL EXTRACTED TEXT PREVIEW:", (all_extracted_text or "")[:500])
+
     # 3. Generate initial summary + create FAISS vector index
     if all_extracted_text:
         try:
@@ -191,11 +255,18 @@ def processing_report_view(request, session_id):
             )
             session.initial_summary = summary
 
-            rebuild_session_vector_index(session)
+            # RAG index create
+            try:
+                rebuild_session_vector_index(session)
+            except Exception as e:
+                print("VECTOR_INDEX_ERROR:", str(e))
+                # Do not fail the whole session if vector index fails
+                # Chat can still fallback depending on chat view logic
 
             session.status = "completed"
 
         except Exception as e:
+            print("AI_PROCESSING_ERROR:", str(e))
             session.initial_summary = f"AI_PROCESSING_ERROR: {str(e)}"
             session.status = "failed"
 
@@ -203,12 +274,12 @@ def processing_report_view(request, session_id):
         if session.language == "bn":
             session.initial_summary = (
                 "Uploaded file থেকে readable text পাওয়া যায়নি। "
-                "অনুগ্রহ করে পরিষ্কার PDF বা image upload করুন।"
+                "অনুগ্রহ করে পরিষ্কার PDF/image upload করুন অথবা image টি আরও clear করে দিন।"
             )
         else:
             session.initial_summary = (
                 "No readable text was found in the uploaded file. "
-                "Please upload a clear PDF or image."
+                "Please upload a clearer PDF/image."
             )
 
         session.status = "failed"
@@ -221,6 +292,7 @@ def processing_report_view(request, session_id):
             session=session,
             role="assistant",
             content=session.initial_summary,
+            defaults={"sources": []},
         )
 
     # 5. Create default suggested questions
@@ -284,26 +356,8 @@ def attach_report_view(request, session_id):
         rebuild_session_vector_index(session)
         session.status = "completed"
     except Exception as e:
-        session.status = "failed"
-
-        if session.language == "bn":
-            error_message = (
-                f"নতুন রিপোর্ট upload হয়েছে, কিন্তু vector index update করতে সমস্যা হয়েছে: {str(e)}"
-            )
-        else:
-            error_message = (
-                f"New report was uploaded, but vector index update failed: {str(e)}"
-            )
-
-        ChatMessage.objects.create(
-            session=session,
-            role="assistant",
-            content=error_message,
-            sources=[],
-        )
-
-        session.save()
-        return redirect("chat_room", session_id=session.id)
+        print("VECTOR_INDEX_ERROR:", str(e))
+        session.status = "completed"  # keep session usable even if vector fails
 
     session.save()
 
@@ -317,7 +371,7 @@ def attach_report_view(request, session_id):
             )
         else:
             confirmation = (
-                "নতুন রিপোর্ট process করা যায়নি। অনুগ্রহ করে পরিষ্কার PDF বা image upload করুন।"
+                "নতুন রিপোর্ট process করা যায়নি। অনুগ্রহ করে পরিষ্কার PDF/image upload করুন।"
             )
     else:
         if successful_files:
@@ -328,7 +382,7 @@ def attach_report_view(request, session_id):
             )
         else:
             confirmation = (
-                "The new report could not be processed. Please upload a clear PDF or image."
+                "The new report could not be processed. Please upload a clearer PDF/image."
             )
 
     if failed_files:

@@ -5,13 +5,19 @@ from google.genai import types
 
 
 def get_gemini_client():
+    """
+    Create Gemini client using API key from Django settings.
+    """
     if not settings.GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is missing. Please add it to your .env file.")
 
     return genai.Client(api_key=settings.GEMINI_API_KEY)
 
 
-def _guess_mime_type(file_path):
+def _guess_image_mime_type(file_path):
+    """
+    Guess image MIME type from file extension.
+    """
     file_path = file_path.lower()
 
     if file_path.endswith(".png"):
@@ -29,26 +35,41 @@ def _guess_mime_type(file_path):
 def _generate_with_retry(client, prompt_or_contents, task_name="GEMINI_TASK"):
     """
     Common Gemini retry helper.
-    Tries flash first, then flash-lite.
-    Handles temporary 503/429 errors.
+    Tries multiple Gemini models in order.
+    If one model quota is exhausted, unavailable, or unsupported,
+    it moves to the next model so users do not get stuck easily.
     """
 
     models_to_try = [
-        "gemini-2.5-flash",
+        # Best current fallback from your quota table: 0 / 500 RPD
+        "gemini-3.1-flash-lite-preview",
+
+        # Strong multimodal model, but your current free quota may be low
+        "gemini-3-flash-preview",
+
+        # Older but still useful if quota available
         "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+
+        # Deprecated fallback only; not recommended as primary
+        "gemini-2.0-flash-lite",
+        "gemini-2.0-flash",
     ]
 
     last_error = None
 
     for model_name in models_to_try:
-        for attempt in range(3):
+        for attempt in range(2):
             try:
+                print(f"{task_name}: trying model {model_name}")
+
                 response = client.models.generate_content(
                     model=model_name,
                     contents=prompt_or_contents,
                 )
 
                 if response.text:
+                    print(f"{task_name}: success with model {model_name}")
                     return response.text.strip()
 
                 return ""
@@ -57,13 +78,37 @@ def _generate_with_retry(client, prompt_or_contents, task_name="GEMINI_TASK"):
                 last_error = e
                 error_text = str(e)
 
-                if "503" in error_text or "UNAVAILABLE" in error_text or "429" in error_text:
+                print(f"{task_name}: error on {model_name}: {error_text}")
+
+                # Quota/rate limit: do not keep retrying same model. Try next model.
+                if (
+                    "429" in error_text
+                    or "RESOURCE_EXHAUSTED" in error_text
+                    or "quota" in error_text.lower()
+                    or "rate limit" in error_text.lower()
+                ):
+                    break
+
+                # Model not found / unsupported for this API or input type: try next model.
+                if (
+                    "404" in error_text
+                    or "NOT_FOUND" in error_text
+                    or "not found" in error_text.lower()
+                    or "not supported" in error_text.lower()
+                ):
+                    break
+
+                # Temporary overload: retry same model once, then continue.
+                if "503" in error_text or "UNAVAILABLE" in error_text:
                     time.sleep(2 + attempt * 2)
                     continue
 
-                raise e
+                # Other unexpected errors: try next model instead of crashing immediately.
+                break
 
-    return f"{task_name}_FAILED_AFTER_RETRIES: {str(last_error)}"
+    return (
+        f"{task_name}_FAILED_AFTER_ALL_MODELS: {str(last_error)}"
+    )
 
 
 def extract_text_from_image_with_gemini(image_path):
@@ -78,16 +123,16 @@ def extract_text_from_image_with_gemini(image_path):
         image_bytes = image_file.read()
 
     prompt = """
-You are an OCR and medical document extraction assistant.
+You are an OCR and medical/document text extraction assistant.
 
 Task:
 Extract all readable text from this image.
 
 Rules:
 - Do not diagnose.
-- Do not explain the report yet.
-- Only extract the visible text.
-- Preserve test names, values, units, reference ranges, dates, and headings.
+- Do not explain the report/document.
+- Only extract the visible/readable text.
+- Preserve headings, tables, test names, values, units, reference ranges, dates, names, phone numbers, and labels.
 - If a value is unclear, write [unclear].
 - Keep the output clean and structured.
 """
@@ -95,7 +140,7 @@ Rules:
     contents = [
         types.Part.from_bytes(
             data=image_bytes,
-            mime_type=_guess_mime_type(image_path),
+            mime_type=_guess_image_mime_type(image_path),
         ),
         prompt,
     ]
@@ -103,7 +148,48 @@ Rules:
     return _generate_with_retry(
         client=client,
         prompt_or_contents=contents,
-        task_name="GEMINI_IMAGE_EXTRACTION"
+        task_name="GEMINI_IMAGE_EXTRACTION",
+    )
+
+
+def extract_text_from_pdf_with_gemini(pdf_path):
+    """
+    Extract readable text from a PDF using Gemini.
+    Useful for scanned/image-based PDFs where pypdf cannot extract text.
+    """
+
+    client = get_gemini_client()
+
+    with open(pdf_path, "rb") as pdf_file:
+        pdf_bytes = pdf_file.read()
+
+    prompt = """
+You are an OCR and document extraction assistant.
+
+Task:
+Extract all readable text from this PDF document.
+
+Rules:
+- Do not explain the document.
+- Do not diagnose.
+- Only extract visible/readable text.
+- Preserve headings, tables, names, values, units, dates, phone numbers, and important labels.
+- If a value is unclear, write [unclear].
+- Keep the output clean and structured.
+"""
+
+    contents = [
+        types.Part.from_bytes(
+            data=pdf_bytes,
+            mime_type="application/pdf",
+        ),
+        prompt,
+    ]
+
+    return _generate_with_retry(
+        client=client,
+        prompt_or_contents=contents,
+        task_name="GEMINI_PDF_EXTRACTION",
     )
 
 
@@ -196,7 +282,7 @@ Extracted document text:
     return _generate_with_retry(
         client=client,
         prompt_or_contents=prompt,
-        task_name="GEMINI_SUMMARY"
+        task_name="GEMINI_SUMMARY",
     )
 
 
@@ -204,7 +290,7 @@ def generate_chat_answer_with_gemini(
     report_context,
     user_question,
     language="en",
-    chat_history=None
+    chat_history=None,
 ):
     """
     Generate a smart safe chat answer.
@@ -352,5 +438,5 @@ User question:
     return _generate_with_retry(
         client=client,
         prompt_or_contents=prompt,
-        task_name="GEMINI_CHAT"
+        task_name="GEMINI_CHAT",
     )
