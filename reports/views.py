@@ -1,5 +1,6 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
+from django.conf import settings
 
 from .models import ReportSession, UploadedReportFile
 from .extractors import extract_text_from_pdf, clean_extracted_text
@@ -9,7 +10,7 @@ from ai_engine.llm import (
     extract_text_from_pdf_with_gemini,
     generate_initial_summary_with_gemini,
 )
-from ai_engine.rag import create_faiss_index_for_session
+
 
 from chat.models import ChatMessage, SuggestedQuestion
 
@@ -145,16 +146,28 @@ def get_all_extracted_text_for_session(session):
 
 def rebuild_session_vector_index(session):
     """
-    Rebuild FAISS index using all completed files in this session.
+    Rebuild FAISS index only if RAG is enabled.
+    On Render Free, keep ENABLE_RAG=False to avoid memory crash.
     """
 
-    vector_path = create_faiss_index_for_session(session)
+    if not getattr(settings, "ENABLE_RAG", False):
+        print("RAG disabled. Skipping FAISS index creation.")
+        return None
 
-    if vector_path:
-        session.vector_index_path = vector_path
-        session.save()
+    try:
+        from ai_engine.rag import create_faiss_index_for_session
 
-    return vector_path
+        vector_path = create_faiss_index_for_session(session)
+
+        if vector_path:
+            session.vector_index_path = vector_path
+            session.save()
+
+        return vector_path
+
+    except Exception as e:
+        print("VECTOR_INDEX_ERROR:", str(e))
+        return None
 
 
 def create_default_suggested_questions(session):

@@ -4,7 +4,7 @@ from django.contrib import messages
 from reports.models import ReportSession
 from .models import ChatMessage
 from ai_engine.llm import generate_chat_answer_with_gemini
-from ai_engine.rag import retrieve_relevant_context
+from django.conf import settings
 
 
 def get_session_report_context(session):
@@ -97,10 +97,20 @@ def chat_room_view(request, session_id):
         )
 
         # 2. Retrieve relevant report context using RAG
-        report_context = retrieve_relevant_context(session, user_message, k=4)
+        if getattr(settings, "ENABLE_RAG", False):
+            try:
+                from ai_engine.rag import retrieve_relevant_context
 
-        # 3. Build source previews for UI/debug
-        sources = build_sources_from_context(report_context)
+                report_context = retrieve_relevant_context(session, user_message, k=4)
+                sources = build_sources_from_context(report_context)
+
+            except Exception as e:
+                print("RAG_RETRIEVAL_ERROR:", str(e))
+                report_context = get_session_report_context(session)
+                sources = []
+        else:
+            report_context = get_session_report_context(session)
+            sources = []
 
         if not report_context:
             if session.language == "bn":

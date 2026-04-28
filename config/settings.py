@@ -53,7 +53,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
-    
+
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -148,3 +148,4 @@ MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", BASE_DIR / "media"))
 VECTORSTORE_ROOT = Path(os.getenv("VECTORSTORE_ROOT", BASE_DIR / "vectorstores"))
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+ENABLE_RAG = os.getenv("ENABLE_RAG", "False") == "True"
