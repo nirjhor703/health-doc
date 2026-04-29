@@ -1,7 +1,16 @@
-import time
 from django.conf import settings
 from google import genai
 from google.genai import types
+
+
+# Lightweight fallback model chain.
+# Keep this short for Render Free tier to avoid worker timeout / memory kill.
+GEMINI_MODELS_TO_TRY = [
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+]
 
 
 def get_gemini_client():
@@ -34,81 +43,67 @@ def _guess_image_mime_type(file_path):
 
 def _generate_with_retry(client, prompt_or_contents, task_name="GEMINI_TASK"):
     """
-    Common Gemini retry helper.
-    Tries multiple Gemini models in order.
-    If one model quota is exhausted, unavailable, or unsupported,
-    it moves to the next model so users do not get stuck easily.
+    Lightweight Gemini fallback helper for Render Free tier.
+
+    Strategy:
+    - Try multiple models one by one.
+    - Do not retry the same model with sleep.
+    - If one model has quota issue / overload / unsupported input, move to next model.
+    - Return controlled error text instead of crashing the Django worker.
     """
-
-    models_to_try = [
-        # Best current fallback from your quota table: 0 / 500 RPD
-        "gemini-3.1-flash-lite-preview",
-
-        # Strong multimodal model, but your current free quota may be low
-        "gemini-3-flash-preview",
-
-        # Older but still useful if quota available
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-flash",
-
-        # Deprecated fallback only; not recommended as primary
-        "gemini-2.0-flash-lite",
-        "gemini-2.0-flash",
-    ]
 
     last_error = None
 
-    for model_name in models_to_try:
-        for attempt in range(2):
-            try:
-                print(f"{task_name}: trying model {model_name}")
+    for model_name in GEMINI_MODELS_TO_TRY:
+        try:
+            print(f"{task_name}: trying model {model_name}")
 
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt_or_contents,
-                )
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt_or_contents,
+            )
 
-                if response.text:
-                    print(f"{task_name}: success with model {model_name}")
-                    return response.text.strip()
+            if response.text:
+                print(f"{task_name}: success with model {model_name}")
+                return response.text.strip()
 
-                return ""
+            print(f"{task_name}: empty response from {model_name}")
+            continue
 
-            except Exception as e:
-                last_error = e
-                error_text = str(e)
+        except Exception as e:
+            last_error = e
+            error_text = str(e)
 
-                print(f"{task_name}: error on {model_name}: {error_text}")
+            print(f"{task_name}: error on {model_name}: {error_text}")
 
-                # Quota/rate limit: do not keep retrying same model. Try next model.
-                if (
-                    "429" in error_text
-                    or "RESOURCE_EXHAUSTED" in error_text
-                    or "quota" in error_text.lower()
-                    or "rate limit" in error_text.lower()
-                ):
-                    break
+            # Do not retry same model. Move to next.
+            continue
 
-                # Model not found / unsupported for this API or input type: try next model.
-                if (
-                    "404" in error_text
-                    or "NOT_FOUND" in error_text
-                    or "not found" in error_text.lower()
-                    or "not supported" in error_text.lower()
-                ):
-                    break
+    return f"{task_name}_FAILED_AFTER_ALL_MODELS: {str(last_error)}"
 
-                # Temporary overload: retry same model once, then continue.
-                if "503" in error_text or "UNAVAILABLE" in error_text:
-                    time.sleep(2 + attempt * 2)
-                    continue
 
-                # Other unexpected errors: try next model instead of crashing immediately.
-                break
+def _is_model_failure(text):
+    """
+    Detect controlled model failure outputs.
+    """
+    if not text:
+        return True
 
-    return (
-        f"{task_name}_FAILED_AFTER_ALL_MODELS: {str(last_error)}"
-    )
+    upper_text = text.upper()
+
+    failure_markers = [
+        "FAILED_AFTER_ALL_MODELS",
+        "RESOURCE_EXHAUSTED",
+        "QUOTA",
+        "RATE LIMIT",
+        "429",
+        "503",
+        "UNAVAILABLE",
+        "NOT_FOUND",
+        "API KEY",
+    ]
+
+    return any(marker in upper_text for marker in failure_markers)
 
 
 def extract_text_from_image_with_gemini(image_path):
@@ -201,6 +196,11 @@ def generate_initial_summary_with_gemini(extracted_text, language="en"):
 
     client = get_gemini_client()
 
+    # Keep input small for Render Free tier.
+    extracted_text = (extracted_text or "").strip()
+    if len(extracted_text) > 6000:
+        extracted_text = extracted_text[:6000]
+
     if language == "bn":
         language_instruction = """
 Respond only in natural Bangla/Banglish.
@@ -279,11 +279,29 @@ Extracted document text:
 {extracted_text}
 """
 
-    return _generate_with_retry(
+    result = _generate_with_retry(
         client=client,
         prompt_or_contents=prompt,
         task_name="GEMINI_SUMMARY",
     )
+
+    if _is_model_failure(result):
+        if language == "bn":
+            return (
+                "রিপোর্ট থেকে text extract করা হয়েছে, কিন্তু AI summary এখন তৈরি করা যায়নি "
+                "কারণ AI model সাময়িকভাবে busy অথবা quota limited। কিছুক্ষণ পরে আবার চেষ্টা করুন।\n\n"
+                "Extracted text preview:\n"
+                f"{extracted_text[:1500]}"
+            )
+
+        return (
+            "Text was extracted from the report, but the AI summary could not be generated right now "
+            "because the AI model is temporarily busy or quota limited. Please try again later.\n\n"
+            "Extracted text preview:\n"
+            f"{extracted_text[:1500]}"
+        )
+
+    return result
 
 
 def generate_chat_answer_with_gemini(
@@ -294,19 +312,20 @@ def generate_chat_answer_with_gemini(
 ):
     """
     Generate a smart safe chat answer.
-    The answer length and structure should depend on the user's question.
-
-    Examples:
-    - "What doctor should I consult?" -> 1-3 lines only.
-    - "What is hemoglobin?" -> short simple answer.
-    - "Summarize report" -> structured sections.
-    - "Which values are high/low?" -> short bullet list.
+    The answer length and structure depends on the user's question.
     """
 
     client = get_gemini_client()
 
     if chat_history is None:
         chat_history = []
+
+    # Keep context small for Render Free tier.
+    report_context = (report_context or "").strip()
+    user_question = (user_question or "").strip()
+
+    if len(report_context) > 6000:
+        report_context = report_context[:6000]
 
     if language == "bn":
         language_instruction = """
@@ -367,9 +386,13 @@ Do NOT write "Information Found in the Report" unless the user specifically asks
 
     formatted_history = ""
 
-    for item in chat_history:
+    for item in chat_history[-6:]:
         role = item.get("role", "")
         content = item.get("content", "")
+
+        if len(content) > 800:
+            content = content[:800]
+
         formatted_history += f"\n{role}: {content}\n"
 
     prompt = f"""
@@ -435,8 +458,22 @@ User question:
 {user_question}
 """
 
-    return _generate_with_retry(
+    result = _generate_with_retry(
         client=client,
         prompt_or_contents=prompt,
         task_name="GEMINI_CHAT",
     )
+
+    if _is_model_failure(result):
+        if language == "bn":
+            return (
+                "AI model এখন সাময়িকভাবে busy অথবা quota limited। "
+                "কিছুক্ষণ পরে আবার চেষ্টা করুন।"
+            )
+
+        return (
+            "The AI model is temporarily busy or quota limited. "
+            "Please try again later."
+        )
+
+    return result
